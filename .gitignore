@@ -5,3 +5,4 @@ paket-files
 
 */obj/*
 */bin/*
+.fake
