@@ -1,13 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
-    <PropertyGroup>
-        <TargetFrameworks>netstandard2.0</TargetFrameworks>
-        <RootNamespace>Nabu</RootNamespace>
-        <Name>Name</Name>
-        <OutputType>Library</OutputType>
-    </PropertyGroup>
-    <ItemGroup>
-        <Compile Include="useful.fs" />
-        <None Include="paket.references" />
-    </ItemGroup>
-    <Project Include="..\.paket\Packet.Restore.targets" />
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0</TargetFrameworks>
+    <RootNamespace>Nabu</RootNamespace>
+    <Name>Name</Name>
+    <OutputType>Library</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="useful.fs" />
+    <None Include="paket.references" />
+  </ItemGroup>
+  <Import Project="..\.paket\Paket.Restore.targets" />
 </Project>
