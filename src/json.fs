@@ -4,6 +4,7 @@ open Microsoft.FSharp.Reflection
 open Newtonsoft.Json
 open System
 open System.Reflection
+open Nabu.Interop
 open Nabu.Memorize
 
 module private Memorized =
@@ -13,6 +14,10 @@ module private Memorized =
     let getUnionCaseFieldValues = memorize FSharpValue.PreComputeUnionReader
 
     let constructUnionCase = memorize FSharpValue.PreComputeUnionConstructor
+
+module private Helpers =
+    let findUnionCase = Memorized.getUnionCases >> flip Array.tryFind
+    let findUnionCaseByName objType caseName = findUnionCase objType (fun i -> i.Name.Equals caseName)
 
 module Attributes =
     // Sets the default case to use when reading JSON. 
