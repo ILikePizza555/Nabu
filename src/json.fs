@@ -2,6 +2,7 @@ namespace Nabu.Json
 
 open Microsoft.FSharp.Reflection
 open Newtonsoft.Json
+open Newtonsoft.Json.Serialization
 open System
 open System.Reflection
 open Nabu.Interop
@@ -19,6 +20,12 @@ module private Memorized =
         let attribute = t.GetCustomAttribute<'attr> ()
         if obj.ReferenceEquals(attribute, null) then None
         else Some attribute)
+
+    let inline getUnionFields v =
+        let cases = v.GetType () |> getUnionCases
+        let tag = getUnionTag (v.GetType ()) v
+        let case = cases.[tag]
+        (case, getUnionCaseFieldValues case v)
 
 module private Helpers =
     let findUnionCase = Memorized.getUnionCases >> flip Array.tryFind
@@ -113,7 +120,7 @@ module Converters =
             // Is it a union that isn't a list?
             memorize (fun objType -> FSharpType.IsUnion objType && 
                 not (objType.GetTypeInfo().IsGenericType && objType.GetGenericTypeDefinition() = typedefof<_ list>))
-        
+
         override _.CanConvert objectType = canConvertMemorized objectType
 
         override _.ReadJson (reader, objectType, existingValue, serializer) = 
@@ -148,3 +155,30 @@ module Converters =
                     | Some result -> result
                     | None -> failreadwithf "No case with name %s found." defaultCaseName
                 | Error message -> failreadwith message
+        
+        override _.WriteJson (writer, value, serializer) =
+            let convertName =
+                match serializer.ContractResolver with
+                | :? DefaultContractResolver as resolver -> resolver.GetResolvedPropertyName
+                | _ -> id
+
+            let case, fields = Memorized.getUnionFields value
+
+            match fields with
+            | [||] -> writer.WriteValue (convertName case.Name)
+            | [|onevalue|] ->
+                writer.WriteStartObject ()
+                writer.WritePropertyName (convertName case.Name)
+                serializer.Serialize (writer, onevalue)
+                writer.WriteEndObject ()
+            | _ -> 
+                writer.WriteStartObject ()
+                writer.WritePropertyName (convertName case.Name)
+                writer.WriteStartObject ()
+                case.GetFields () |>
+                    flip Seq.zip fields |>
+                    Seq.iter (fun (pi, v) -> 
+                        writer.WritePropertyName pi.Name
+                        serializer.Serialize (writer, v))
+                writer.WriteEndObject ()
+                writer.WriteEndObject ()
