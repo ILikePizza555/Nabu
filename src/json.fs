@@ -10,14 +10,41 @@ open Nabu.Memorize
 module private Memorized =
     let getUnionTag (t: System.Type) = memorize FSharpValue.PreComputeUnionTagReader t
     let getUnionCases (t: System.Type) = memorize FSharpType.GetUnionCases t
-    let getUnionCaseFields = memorize (fun (uci: UnionCaseInfo) -> uci.GetFields) 
+    let getUnionCaseFields = memorize (fun (uci: UnionCaseInfo) -> uci.GetFields ()) 
     let getUnionCaseFieldValues = memorize FSharpValue.PreComputeUnionReader
 
     let constructUnionCase = memorize FSharpValue.PreComputeUnionConstructor
 
+    let findAttributeOnType<'attr when 'attr :> Attribute> = memorize (fun (t: Type) ->
+        let attribute = t.GetCustomAttribute<'attr> ()
+        if obj.ReferenceEquals(attribute, null) then None
+        else Some attribute)
+
 module private Helpers =
     let findUnionCase = Memorized.getUnionCases >> flip Array.tryFind
     let findUnionCaseByName objType caseName = findUnionCase objType (fun i -> i.Name.Equals caseName)
+    let findUnionCaseWithFieldCount objType caseName count =
+        findUnionCase objType (fun i ->
+            let fields = i.GetFields ()
+            i.Name.Equals(caseName) && Array.length fields = count)
+    let findUnionCaseWithFieldNames objType caseName names =
+        let pred (f: PropertyInfo) n = f.Name = n
+        findUnionCase objType (fun i ->
+            let caseFields = i.GetFields ()
+            i.Name.Equals(caseName) &&
+            Array.exists2 pred caseFields names)
+
+    let makeUnionCaseFromJToken serializer (valueTokens: Linq.JToken []) caseInfo  =
+        Memorized.getUnionCaseFields caseInfo |>
+        Array.zip valueTokens |>
+        Array.map (fun (jv, pi) -> jv.ToObject(pi.PropertyType, serializer)) |>
+        Memorized.constructUnionCase caseInfo
+
+    let unionCaseTryOfProperties objType serializer caseName (properties: Linq.JProperty []) =
+        let fieldNameQuery = properties |> Array.map (fun p -> p.Name)
+        let fieldValues = properties |> Array.map (fun p -> p.Value)
+        findUnionCaseWithFieldNames objType caseName fieldNameQuery |>
+            Option.map (makeUnionCaseFromJToken serializer fieldValues)
 
 module Attributes =
     // Sets the default case to use when reading JSON. 
@@ -89,3 +116,35 @@ module Converters =
         
         override _.CanConvert objectType = canConvertMemorized objectType
 
+        override _.ReadJson (reader, objectType, existingValue, serializer) = 
+            let jToken = Linq.JToken.Load reader
+
+            // Check that it's not null
+            if isNull jToken then
+                null
+            else
+                match readJToken jToken with
+                | Ok (CaseName caseName) -> 
+                    match Helpers.findUnionCaseWithFieldCount objectType caseName 0 with
+                    | Some caseInfo -> Memorized.constructUnionCase caseInfo [||]
+                    | None -> failreadwithf "Cannot parse token %O: Case with name %s and no fields does not exist." jToken caseName
+                | Ok (CaseArrayValueObject (caseName, values)) ->
+                    match Helpers.findUnionCaseByName objectType caseName with
+                    | Some caseInfo -> Helpers.makeUnionCaseFromJToken serializer values caseInfo
+                    | None -> failreadwithf "Cannot parse token %O: No match for case named %s with fields: %O" jToken caseName values
+                | Ok (CaseObjectValueObject (caseName, properties)) ->
+                    match Helpers.unionCaseTryOfProperties objectType serializer caseName properties with
+                    | Some result -> result
+                    | None -> 
+                        let fieldNames = properties |> Array.map (fun p -> p.Name)
+                        failreadwithf "Cannot parse token %O: No match for case named %s with fields with names: %O" jToken caseName fieldNames
+                | Ok (NormalObject properties) ->
+                    let defaultCaseName = 
+                        match Memorized.findAttributeOnType<Attributes.JsonReadDefaultUnionCaseAttribute> objectType with
+                        | Some attr -> attr.Case
+                        | None -> failreadwithf "Cannot parse object %O: No default union case available." jToken
+                    
+                    match Helpers.unionCaseTryOfProperties objectType serializer defaultCaseName properties with
+                    | Some result -> result
+                    | None -> failreadwithf "No case with name %s found." defaultCaseName
+                | Error message -> failreadwith message
